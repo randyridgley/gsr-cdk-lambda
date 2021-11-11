@@ -56,3 +56,4 @@ cdk.out/
 *.vscode/
 *target/
 **/cdk.context.json
+infrstructure/scripts/gsr-resources-1.0-SNAPSHOT.jar
