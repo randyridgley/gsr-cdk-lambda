@@ -5,12 +5,12 @@ Most of this code was taken from the [MSK Workshop](https://amazonmsk-labs.works
 ![GSR](./images/arch_overview_gsr.png)
 
 # Getting Started
-This code assumes knowledge of Java, Maven, and the [AWS CDK](https://docs.aws.amazon.com/cdk/latest/guide/getting_started.html). These tools are required to be installed on the developer machine before running. This project also used [`Projen`](https://github.com/projen/projen) to geenrate the CDK infrastructure project in the `infra` directory. 
+This code assumes knowledge of Java, Maven, and the [AWS CDK](https://docs.aws.amazon.com/cdk/latest/guide/getting_started.html). These tools are required to be installed on the developer machine before running. This project also used [`Projen`](https://github.com/projen/projen) to geenrate the CDK infrastructure project in the `infrastructure` directory. 
 
 This project was tested with Open JDK version 17 and Maven 3.8.3 and AWS CDK 1.130.0 and other versions may or may not work. 
 
 ## Compiling the JAR
-The  producer and consumer will be created in the jar and the Click.avsc Avro file will be created into a Java POJO for use in the project. The command below with also move the shaded jar into the `infra/scripts` directory for use with deploying with CDK.
+The  producer and consumer will be created in the jar and the Click.avsc Avro file will be created into a Java POJO for use in the project. The command below with also move the shaded jar into the `infrastructure/scripts` directory for use with deploying with CDK.
 
 ```bash
 mvn package
@@ -52,7 +52,7 @@ sudo ./setup.sh
 
 In the config folder find the `producer.properties_msk` file and replace the value for `BOOTSTRAP_SERVERS_CONFIG` with the output of running the command `echo $brokers` from the terminal.
 
-The last thing you need to do is upload the `gsr-resources-1.0-SNAPSHOT.jar` in the `infra/scripts` directory to the `~/environment/kafka` directory in your cloud9 instance. To do so select teh `kafka` directory and then select `File` from the top menu in Cloud9 and choose `Upload Local Files...`. Select the jar to upload.
+The last thing you need to do is upload the `gsr-resources-1.0-SNAPSHOT.jar` in the `infrastructure/scripts` directory to the `~/environment/kafka` directory in your cloud9 instance. To do so select teh `kafka` directory and then select `File` from the top menu in Cloud9 and choose `Upload Local Files...`. Select the jar to upload.
 
 ### Producing records
 
