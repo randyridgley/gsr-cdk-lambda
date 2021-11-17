@@ -1,15 +1,14 @@
 import { SecurityGroup, SubnetType, Vpc } from '@aws-cdk/aws-ec2';
-import { CfnRegistry } from '@aws-cdk/aws-glue';
-import { PolicyStatement, Role, ServicePrincipal } from '@aws-cdk/aws-iam';
-import { DeliveryStream } from '@aws-cdk/aws-kinesisfirehose';
-import { S3Bucket } from '@aws-cdk/aws-kinesisfirehose-destinations';
+import { CfnCrawler, CfnRegistry, Database } from '@aws-cdk/aws-glue';
+import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from '@aws-cdk/aws-iam';
+import { CfnDeliveryStream } from '@aws-cdk/aws-kinesisfirehose';
 import { Code, Runtime, Function, StartingPosition } from '@aws-cdk/aws-lambda';
 import { ManagedKafkaEventSource } from '@aws-cdk/aws-lambda-event-sources';
-import { LogGroup, RetentionDays } from '@aws-cdk/aws-logs';
 import { Bucket } from '@aws-cdk/aws-s3';
-import { App, CfnOutput, Construct, Duration, RemovalPolicy, Size, Stack, StackProps } from '@aws-cdk/core';
+import { App, CfnOutput, Construct, Duration, RemovalPolicy, Stack, StackProps } from '@aws-cdk/core';
 import { KafkaConsole } from './kafka-console';
 import { MSKCluster } from './msk-cluster';
+import { S3DeliveryPipeline } from './s3-delivery-pipeline';
 import { VpcNetwork } from './vpc-network';
 
 export interface CoreStackProps extends StackProps {
@@ -22,7 +21,7 @@ export class CoreMessagingStack extends Stack {
   readonly securityGroup: SecurityGroup;
   readonly registryName: string;
   readonly bucket: Bucket;
-  readonly deliveryStream: DeliveryStream;
+  readonly deliveryStream: CfnDeliveryStream;
 
   constructor(scope: Construct, id: string, props: CoreStackProps) {
     super(scope, id, props);
@@ -46,30 +45,89 @@ export class CoreMessagingStack extends Stack {
 
     this.bucket = new Bucket(this, 'Bucket')
 
-    const firehoseRole = new Role(this, 'kinesis-role', {
-      assumedBy: new ServicePrincipal('firehose.amazonaws.com'),
+    const database = new Database(this, 'ClickStreamDatabase', {
+      databaseName: 'clickstreamdb'
     });
 
-    const firehoseLogGroup = new LogGroup(this, 'FirehoseLogGroup', {
-      logGroupName: '/aws/firehose/gsr',
-      removalPolicy: RemovalPolicy.DESTROY,
-      retention: RetentionDays.ONE_DAY,
+    const delivery = new S3DeliveryPipeline(this, 's3-delivery-pipeline', {
+        bucket: this.bucket,  
+        database: database,
+        baseTableName: 'clickstream',
+        timestampColumn: 'eventtimestamp',
+        rawColumns: [
+          { name: "ip", type: "string" },
+          { name: "eventtimestamp", type: "int" },
+          { name: "devicetype", type: "string" },
+          { name: "event_type", type: "string" },
+          { name: "product_type", type: "string" },
+          { name: "userid", type: "int" },
+          { name: "globalseq", type: "int" },
+          { name: "prevglobalseq", type: "int" }
+        ],
+        rawPartitions: [
+          { name: "year", type: "string" },
+          { name: "month", type: "string" },
+          { name: "day", type: "string" },
+        ],
+        processedColumns: [
+          { name: "ip", type: "string" },
+          { name: "eventtimestamp", type: "int" },
+          { name: "devicetype", type: "string" },
+          { name: "event_type", type: "string" },
+          { name: "product_type", type: "string" },
+          { name: "userid", type: "int" },
+          { name: "globalseq", type: "int" },
+          { name: "prevglobalseq", type: "int" }
+        ],
+        processedPartitions: [
+          { name: "year", type: "string" },
+          { name: "month", type: "string" },
+          { name: "day", type: "string" },
+        ],
+    });
+    this.deliveryStream = delivery.deliveryStream;
+    
+    const crawlerRole = new Role(this, 'GluePartitionCrawlerRole', {
+      assumedBy: new ServicePrincipal('glue.amazonaws.com'),
+      managedPolicies: [
+        ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSGlueServiceRole'),
+      ]
+    });
+    this.bucket.grantRead(crawlerRole);
+
+    new CfnCrawler(this, 'PartitionUpdateCralwer', {
+      role:  crawlerRole.roleName,
+      targets: {
+        catalogTargets: [
+          {
+            databaseName: database.databaseName,
+            tables: [
+              'p_clickstream'
+            ]
+          },
+          {
+            databaseName: database.databaseName,
+            tables: [
+              'r_clickstream'
+            ]
+          }          
+        ]
+      },
+      configuration: '{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}},"Grouping":{"TableGroupingPolicy":"CombineCompatibleSchemas"}}',
+      databaseName: database.databaseName,
+      name: 'ClickstreamUpdatePartitionCrawler',
+      description: 'Crawler to update partitions of clickstream tables every 5 minutes',
+      recrawlPolicy: {
+        recrawlBehavior: 'CRAWL_EVERYTHING'
+      },
+      schedule: {
+        scheduleExpression: 'cron(0/5 * * * ? *)',
+      },
+      schemaChangePolicy: {
+        deleteBehavior: 'LOG',
+        updateBehavior: 'UPDATE_IN_DATABASE'
+      },      
     })
-
-    const s3Destination = new S3Bucket(this.bucket, {
-      bufferingInterval: Duration.seconds(60),
-      bufferingSize: Size.mebibytes(64),
-      dataOutputPrefix: 'output/',
-      logGroup: firehoseLogGroup,
-    });
-
-    this.deliveryStream = new DeliveryStream(this, 'DeliveryStream', {
-      role: firehoseRole,
-      destinations: [s3Destination]
-    });
-
-    this.bucket.grantWrite(firehoseRole);
-    firehoseLogGroup.grantWrite(firehoseRole);    
   }
 }
 
@@ -81,7 +139,7 @@ export interface GlueSchemaRegistryStackProps extends StackProps {
   readonly securityGroup: SecurityGroup;
   readonly registryName: string;
   readonly bucket: Bucket;
-  readonly deliveryStream: DeliveryStream;
+  readonly deliveryStream: CfnDeliveryStream;
 }
 
 export class GlueSchemaRegistryConsumerStack extends Stack {
@@ -104,7 +162,7 @@ export class GlueSchemaRegistryConsumerStack extends Stack {
       timeout: Duration.seconds(300),
       environment: {
         DEFAULT_SCHEMA_REGISTRY_NAME: props.registryName,
-        DELIVERY_STREAM_NAME: props.deliveryStream.deliveryStreamName,
+        DELIVERY_STREAM_NAME: props.deliveryStream.ref,
         RETRIES: '3',
         CSR: 'false',
         SECONDARY_DESERIALIZER: 'false'
@@ -117,8 +175,16 @@ export class GlueSchemaRegistryConsumerStack extends Stack {
     })
     consumerFunction.addToRolePolicy(glueRegistryPolicy);
     props.bucket.grantRead(consumerFunction);
-    props.deliveryStream.grantPutRecords(consumerFunction);
-    
+    // props.deliveryStream.grantPutRecords(consumerFunction);
+    const firehosePolicy = new PolicyStatement({
+      actions: [
+        "firehose:PutRecord",
+        "firehose:PutRecordBatch",
+      ],
+      resources: ['*']
+    }); 
+    consumerFunction.addToRolePolicy(firehosePolicy);
+
     consumerFunction.addEventSource(new ManagedKafkaEventSource({
       clusterArn: props.mskArn, // broken until naming gets fixed https://github.com/aws/aws-cdk/issues/15700
       topic: 'ExampleTopic',
@@ -165,7 +231,7 @@ new GlueSchemaRegistryConsumerStack(app, 'GSRConsumerStack', {
   name: 'test-registry',
   description: 'default schema registry for kafka topics',
   vpc: coreStack.vpc,
-  mskArn: 'arn:aws:kafka:us-east-1:649037252677:cluster/GSRKafkaCluster/9d52f751-b878-4412-921b-2f9b72302c7e-4', // coreStack.mskArn,
+  mskArn: 'arn:aws:kafka:us-east-1:649037252677:cluster/GSRKafkaCluster/8e939997-8cab-4b83-9a77-15b222490f97-21', // coreStack.mskArn,
   securityGroup: coreStack.securityGroup,
   registryName: coreStack.registryName,
   bucket: coreStack.bucket,
